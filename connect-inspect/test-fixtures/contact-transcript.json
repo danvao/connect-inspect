@@ -1,0 +1,77 @@
+{
+  "AWSAccountId": "439093223885",
+  "InstanceId": "8f50ee44-bd31-4574-bf98-5aac1a4c69ce",
+  "ContactId": "11111111-1111-4111-8111-111111111111",
+  "InteractionLogsStatus": "COMPLETED",
+  "InteractionLogs": [
+    {
+      "AbsoluteTime": "2026-09-13T16:00:00.000Z",
+      "ContentType": "text/plain",
+      "EventType": "Message",
+      "Source": "CUSTOMER",
+      "LogData": {
+        "Content": "What is an investment account?",
+        "ResourceName": "MainFlow",
+        "ResourceArn": "arn:aws:connect:us-east-1:439093223885:instance/8f50ee44-bd31-4574-bf98-5aac1a4c69ce/contact-flow/33333333-3333-4333-8333-333333333333",
+        "Action": {
+          "Type": "MessageParticipant",
+          "Identifier": "Get customer input",
+          "ExecutionResult": "Success"
+        }
+      }
+    },
+    {
+      "AbsoluteTime": "2026-09-13T16:00:05.000Z",
+      "ContentType": "text/plain",
+      "EventType": "Message",
+      "Source": "BOT",
+      "LogData": {
+        "Content": "An investment account is a tax-advantaged savings account for children.",
+        "AiAgentId": "44444444-4444-4444-8444-444444444444",
+        "PromptId": "55555555-5555-4555-8555-555555555555"
+      }
+    }
+  ],
+  "Analysis": {
+    "channel": "VOICE",
+    "contactSummary": {
+      "automatedInteractionSummary": {
+        "content": "The customer asked what an investment account is. The bot answered with a concise definition."
+      }
+    },
+    "conversationCharacteristics": {
+      "sentiment": {
+        "CUSTOMER": "NEUTRAL",
+        "BOT": "NEUTRAL"
+      },
+      "sentimentPercentage": {
+        "CUSTOMER": {
+          "NEUTRAL": 100
+        }
+      }
+    },
+    "transcript": [
+      {
+        "absoluteTime": "2026-09-13T16:00:00.000Z",
+        "participantRole": "CUSTOMER",
+        "content": "What is an investment account?",
+        "sentiment": "NEUTRAL"
+      },
+      {
+        "absoluteTime": "2026-09-13T16:00:05.000Z",
+        "participantRole": "BOT",
+        "content": "An investment account is a tax-advantaged savings account for children.",
+        "sentiment": "NEUTRAL"
+      }
+    ]
+  },
+  "AIAgentSpansData": {
+    "Spans": [
+      {
+        "AiAgentId": "44444444-4444-4444-8444-444444444444",
+        "PromptId": "55555555-5555-4555-8555-555555555555",
+        "SpanName": "invoke_agent"
+      }
+    ]
+  }
+}

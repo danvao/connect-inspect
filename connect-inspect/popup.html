@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Amazon Connect Exporter</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="header">
+        <div>
+          <p class="eyebrow">Amazon Connect</p>
+          <h1>Runtime Exporter</h1>
+        </div>
+        <span id="sectionBadge" class="badge">Detecting</span>
+      </header>
+
+      <section class="tabBar">
+        <button type="button" class="tabButton active" data-view-tab="config">Configuration</button>
+        <button type="button" class="tabButton" data-view-tab="analytics">Analytics</button>
+      </section>
+
+      <section class="panel commonPanel">
+        <div class="field">
+          <span class="label">Current URL</span>
+          <span id="currentUrl" class="mono truncate">-</span>
+        </div>
+        <div class="field">
+          <span class="label">Detected section</span>
+          <span id="detectedSection">-</span>
+        </div>
+      </section>
+
+      <section class="panel commonPanel">
+        <div class="panelTitle">Output</div>
+        <button id="chooseOutputFolder" type="button">Choose output folder</button>
+        <button id="loadHistory" type="button">Load history</button>
+        <button id="validateLastRun" type="button">Validate last run</button>
+        <button id="runDiagnostics" type="button">Run diagnostics</button>
+        <button id="downloadDiagnostics" type="button" disabled>Download diagnostics report</button>
+        <button id="stopRun" type="button" disabled>Stop after current item</button>
+        <div class="field">
+          <span class="label">Target</span>
+          <span id="outputTarget" class="mono truncate">Chrome downloads</span>
+        </div>
+        <div class="field">
+          <span class="label">History</span>
+          <span id="historyStatus" class="mono truncate">Not loaded</span>
+        </div>
+        <div class="field analyticsPanel hidden">
+          <span class="label">Call queue</span>
+          <span id="queueStatus" class="mono truncate">Import Contact CSV first</span>
+        </div>
+      </section>
+
+      <section class="panel configPanel">
+        <div class="panelTitle">Configuration navigation</div>
+        <div class="navGrid">
+          <button type="button" data-nav="/q-connect/ai-prompts">AI Prompts</button>
+          <button type="button" data-nav="/q-connect/ai-agents">AI Agents</button>
+          <button type="button" data-nav="/q-connect/guardrails">Guardrails</button>
+          <button type="button" data-nav="/contact-flows#contactFlows">Contact flows</button>
+          <button type="button" data-nav="/contact-flows#modules">Flow modules</button>
+          <button type="button" data-nav="/contact-flows#bots">Conversational AI</button>
+          <button type="button" data-nav="/numbers#/">Phone numbers</button>
+          <button type="button" data-nav="/queues">Queues</button>
+          <button type="button" data-nav="/operating-hours">Hours</button>
+        </div>
+      </section>
+
+      <section class="panel analyticsPanel hidden">
+        <div class="panelTitle">Analytics navigation</div>
+        <div class="navGrid">
+          <button type="button" data-nav="/contact-search">Contact search</button>
+          <button type="button" data-contact-search-period="TODAY">Calls today</button>
+          <button type="button" data-contact-search-period="WEEK_TO_DATE">Calls week</button>
+          <button type="button" data-contact-search-period="LAST_TWO_WEEKS">Calls 2 weeks</button>
+          <button type="button" data-contact-search-period="MONTH_TO_DATE">Calls month</button>
+          <button type="button" data-contact-search-period="LAST_MONTH">Calls last month</button>
+        </div>
+      </section>
+
+      <section class="toolbar configPanel">
+        <button id="smokeScan" type="button">Smoke scan sections</button>
+        <button id="scanFive" type="button">Scan 5 details/section</button>
+        <button id="scanAll" type="button">Full config export</button>
+        <button id="validationScan" type="button">Validation screenshots</button>
+        <button id="captureAllIndex" type="button">Capture all pages</button>
+        <button id="captureIndex" type="button">Capture visible page</button>
+        <button id="captureDetail" type="button">Capture detail</button>
+        <button id="identifyVersions" type="button">Identify versions</button>
+      </section>
+
+      <section class="panel analyticsPanel hidden">
+        <div class="panelTitle">Call workflow</div>
+        <button id="startWeeklyLongRun" type="button">Start weekly full run</button>
+        <button id="exportContactSearchCsv" type="button">Export Contact CSV</button>
+        <label class="fileButton" for="contactSearchCsvInput">Import Contact CSV</label>
+        <input id="contactSearchCsvInput" type="file" accept=".csv,text/csv">
+        <button id="dryRunCallQueue" type="button">Dry run call queue</button>
+        <button id="captureNextCall" type="button">Capture next call</button>
+        <button id="captureFiveCalls" type="button">Capture 5 calls</button>
+        <button id="captureTwentyFiveCalls" type="button">Capture 25 calls</button>
+        <button id="captureHundredCalls" type="button">Capture 100 calls</button>
+        <div class="inlineControl">
+          <label for="captureCallLimit">Calls to capture</label>
+          <input id="captureCallLimit" type="number" min="1" max="1000" step="1" value="25">
+          <button id="captureCustomCalls" type="button">Capture N</button>
+        </div>
+        <button id="resumePendingCalls" type="button">Resume pending</button>
+        <button id="recaptureAlreadyCapturedCalls" type="button">Recapture already captured</button>
+        <button id="retryFailedCalls" type="button">Retry failed</button>
+        <button id="resetFailedCalls" type="button">Reset failed</button>
+        <button id="skipFailedCalls" type="button">Skip failed</button>
+        <button id="validateCallQueue" type="button">Validate call queue</button>
+        <button id="buildAnalyticsDashboard" type="button">Build analytics dashboard</button>
+        <button id="runImportedCsvAutomation" type="button">Run imported CSV automation</button>
+        <label class="checkToggle">
+          <input id="archiveRawRuns" type="checkbox" checked>
+          <span>Archive raw run JSON</span>
+        </label>
+        <button id="captureNetworkTranscript" type="button">Capture network transcript</button>
+        <label class="fileButton" for="contactTranscriptInput">Import Contact Transcript</label>
+        <input id="contactTranscriptInput" type="file" accept=".json,application/json">
+      </section>
+
+      <section class="panel configPanel">
+        <button id="exportFlowJson" type="button">Export Flow JSON</button>
+        <label class="fileButton" for="flowJsonInput">Import Flow JSON</label>
+        <input id="flowJsonInput" type="file" accept=".json,application/json">
+        <button id="downloadLast" type="button" disabled>Download last result</button>
+      </section>
+
+      <section id="versionsPanel" class="panel hidden">
+        <div class="panelTitle">Versions</div>
+        <div id="versionsList" class="checkList"></div>
+        <button id="exportSelectedVersions" type="button">Export selected versions</button>
+      </section>
+
+      <section id="runTrackerPanel" class="panel hidden">
+        <div class="panelTitle">Run status</div>
+        <div id="runTrackerStatus" class="trackerStatus">Idle</div>
+        <progress id="runTrackerProgress" max="100" value="0"></progress>
+        <pre id="runTrackerDetails" class="trackerDetails"></pre>
+      </section>
+
+      <section class="panel">
+        <div class="panelTitle">Last result</div>
+        <pre id="resultBox">Ready.</pre>
+      </section>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
