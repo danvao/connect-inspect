@@ -60,7 +60,7 @@ contact-search/queues/latest-call-queue.json
 
 If that file does not exist, analytics capture buttons need a CSV import first.
 
-If Chrome shows a file or directory not found error during import, the selected output folder handle is stale. Click `Choose output folder`, select the same Connect exports folder again, and retry the CSV import. When possible, the extension falls back to Chrome downloads and lists the save warning in the import result.
+If Chrome shows a file or directory not found error during import, the selected output folder handle is stale. Click `Choose output folder`, select the same Connect exports folder again, and retry the CSV import. Automatic runs fail closed: they stop instead of redirecting remaining files to Chrome Downloads.
 
 The Contact CSV import creates the in-memory call queue before writing output files. If saving fails, the queue can still be used in the current extension session and is also backed up in extension storage when Chrome storage quota allows it.
 
@@ -92,6 +92,42 @@ analytics/latest-dashboard.md
 ```
 
 ## Direct Contact Capture
+
+### Manual Detail Export
+
+The side panel detects supported detail pages and changes its primary action to match the current resource. A user can export a guardrail, AI prompt, AI agent, contact flow, flow module, conversational AI page, phone number, queue, operating-hours record, or contact detail without starting a section scan.
+
+Guardrail and AI-agent captures write two intentional layers:
+
+- the complete detail JSON as source evidence, including tables and links;
+- a `-configuration.json` analysis artifact containing normalized, relevant fields only.
+
+The normalized guardrail artifact includes content-filter settings, denied topics, word filters, sensitive-information policies, contextual grounding, blocked messaging, versions, identity, and validation status. The normalized AI-agent artifact includes identity, type, locale, related prompts, tools, security profiles, related guardrails, versions, and validation status.
+
+Manual captures intentionally avoid the duplicate run-folder and canonical copies produced by full automated runs. A manual guardrail or AI-agent detail creates the normalized configuration, source evidence, and a compact JSON run report. Markdown run summaries remain available for automated multi-item runs, where they provide operational value.
+
+For contact records, `Download call transcript` runs the existing direct/network transcript capture for the contact ID in the current URL. It writes the same raw, parsed, summary, and conversation-turn artifacts used by automated call runs.
+
+Prerequisite failures are presented through an expandable action-state button rather than only through the raw result log. The guidance distinguishes among:
+
+- opening an item detail instead of an index;
+- reloading a Contact details page with the extension active;
+- waiting for transcript or analysis content to load;
+- reconnecting the selected output folder;
+- reloading the page when the content script is unavailable.
+
+### Interface Hierarchy
+
+The interface is organized by operator intent:
+
+1. Current page and manual download actions.
+2. Run progress.
+3. Configuration or Call diagnostics workspace.
+4. Primary full-run or queue actions.
+5. Collapsible navigation, recovery, file, storage, and diagnostic tools.
+6. Latest activity log.
+
+This keeps frequent actions visible while preserving advanced and recovery controls without presenting every operation at the same visual priority.
 
 For speed, call capture does not normally open each contact page. It uses the contact ID from the CSV and fetches the observed Amazon Connect internal endpoints directly from the authenticated browser session:
 
@@ -163,7 +199,7 @@ Use `Run diagnostics` when:
 - The selected output folder does not receive files.
 - CSV import appears to do nothing.
 - A run remains stuck in `Starting`.
-- Chrome downloads fallback appears blocked.
+- An explicit diagnostics download appears blocked.
 - The side panel is open but the Amazon Connect page is not responding.
 
 Diagnostics should always produce an in-extension report, even when file-system writes fail. The report is shown in `Last result` and stored as `latestDiagnosticsReport` in Chrome extension storage when quota allows it.
@@ -173,7 +209,7 @@ Current diagnostics checks:
 - Extension storage read/write round trip.
 - Selected output folder permission.
 - Real output folder write test under `_health/`.
-- Chrome downloads fallback.
+- Explicit Chrome Downloads capability for recovery diagnostics.
 - Locked Chrome tab state.
 - Content script page detection.
 - Synthetic Contact Search CSV parser test.
@@ -181,6 +217,14 @@ Current diagnostics checks:
 - Optional diagnostics report write under `_diagnostics/`.
 
 Use `Download diagnostics report` to export the latest diagnostics JSON and Markdown through Chrome Downloads. This path intentionally avoids the selected output folder so the report can still be shared when folder permissions are broken.
+
+## Automatic Run Abort And Folder Failure
+
+Every automatic configuration, screenshot, call-capture, or imported-CSV run requires a selected output folder. Before navigation begins, the extension writes a health file under `_health/` to verify that Chrome still has write access.
+
+Use `Abort automatic run` to stop a long operation. The extension cancels the active wait or capture, prevents later stages from starting, preserves files already written, returns an interrupted contact to `pending` when possible, and returns the locked tab to Amazon Connect home.
+
+If the selected directory disappears or Chrome revokes its permission during a run, the first failed write aborts the entire automation. The extension marks the folder as `reconnect needed` and does not silently send subsequent files to the default Downloads directory. Select the output folder again before retrying or resuming.
 
 Planned next diagnostics improvements:
 

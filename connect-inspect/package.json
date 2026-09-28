@@ -3,6 +3,6 @@
   "type": "module",
   "scripts": {
     "check": "node --check popup.js && node --check content.js && node --check service_worker.js && node --check lib/contact-search-csv-parser.js && node --check lib/contact-transcript-parser.js && node --check features/call-analytics.js",
-    "test": "node tools/validate-contact-parsers.mjs"
+    "test": "node tools/validate-contact-parsers.mjs && node tools/validate-ui-wiring.mjs"
   }
 }

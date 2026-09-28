@@ -13,10 +13,10 @@ No AWS API keys or IAM credentials are required. The extension reads the visible
 1. Open `chrome://extensions`.
 2. Enable `Developer mode`.
 3. Click `Load unpacked`.
-4. Select this folder:
+4. Select the downloaded `connect-inspect` folder that contains `manifest.json`.
 
 ```text
-/Users/danielvazquez/Documents/Codex/2026-09-11/nec/outputs/ai-prompts-capture-extension
+connect-inspect/
 ```
 
 If the Amazon Connect tab was already open before loading the extension, refresh the tab once.
@@ -37,7 +37,7 @@ The side panel locks itself to the Chrome tab from which it was opened. If you s
 
 Use `Choose output folder` to select where generated files should be written.
 
-If Chrome allows folder access, files are written directly to that folder. If folder access is unavailable or fails, the extension falls back to Chrome downloads.
+If no folder has been selected, individual manual exports can use Chrome Downloads. Automatic runs require a writable selected folder and perform a real write test before starting. If that folder becomes unavailable during a run, the extension aborts the run and does not redirect the remaining files to Chrome Downloads.
 
 Every export operation also writes a report file:
 
@@ -91,7 +91,7 @@ This report is intended as the easiest "latest export manifest" to import or rev
 - `Build analytics dashboard` writes `analytics/latest-dashboard.json`, `analytics/latest-dashboard.md`, `analytics/latest-contacts.csv`, and `analytics/latest-contacts.jsonl`.
 - Cross-reference indexes are written under `analytics/by-prompt/`, `analytics/by-agent/`, and `analytics/by-flow/` so prompt/agent/flow usage can be counted without re-reading every transcript.
 - The `Archive raw run JSON` toggle controls whether full contact transcript JSON is duplicated inside each `runs/...` folder. Normalized contact files under `contact-records/{contactId}/` are still saved.
-- Long-running scans and call queues can be stopped with `Stop after current item`; the current page/call finishes first, then the run report is saved with a warning.
+- Long-running scans and call queues can be stopped with `Abort automatic run`. The active wait or capture is canceled, no additional items are opened, and an interrupted contact is returned to `pending` when possible. Files already written are preserved.
 - Captured transcripts are normalized under `contact-records/{contactId}/` with `transcript.json`, `summary.json`, and `conversation-turns.json`.
 - Contact search navigation includes dynamic relative-period presets: today, week to date, last two weeks, month to date, and last month. Dedupe call history by `Contact ID`; keep the latest capture metadata to avoid reprocessing already captured contacts.
 - Capture Contact trace record details as call analytics context. The detail capture focuses on summary/trace/flow references, ARNs, IDs, phone numbers, tables, and links; audio is intentionally out of scope for this extractor.
@@ -166,6 +166,18 @@ If Amazon Connect shows `Unsaved Changes`, cancel or stop. Do not confirm throug
 10. Export a flow JSON manually from Amazon Connect, or click `Export Flow JSON` from a flow page.
 11. Use `Import Flow JSON` in the extension to generate the runtime map.
 
+## Manual Detail Downloads
+
+The top of the side panel now follows the active Amazon Connect detail page. It exposes a single primary action with a page-specific label, such as `Download this guardrail`, `Download this AI prompt`, or `Download these call details`.
+
+Guardrail and AI-agent downloads include a `-configuration.json` artifact intended for analysis. It removes navigation links and duplicated page text while retaining normalized metadata, validation warnings, versions, guardrail policies, agent tools, security profiles, related prompts, and related guardrails when visible. The larger detail JSON remains available as source evidence.
+
+Manual detail downloads use a compact output set: one normalized configuration file, one source-evidence file, and one run report. Canonical and run-folder copies are not both generated for the same manual capture. The side-panel header displays the loaded extension version so operators can confirm that Chrome reloaded the expected build.
+
+On a Contact details page it also exposes `Download call transcript`. This fetches the transcript available to the signed-in console session and saves the raw and normalized contact artifacts without requiring a queue automation.
+
+If a download needs a prerequisite, the panel shows `Download needs attention` or `What do I need to do?`. Expanding it explains the specific recovery action, including opening a detail page, reloading a Contact details page so transcript traffic can be observed, or reconnecting the output folder.
+
 For flow JSON, you can also open a flow designer/detail page and click `Export Flow JSON`. This triggers Amazon Connect's official JSON download. After the download finishes, use `Import Flow JSON` to parse it into a runtime map.
 
 ## Supporting Documentation
@@ -188,7 +200,7 @@ runs/<run-id>/validation.json
 Use the local validator to compare extracted JSON against the saved visible-text snapshots:
 
 ```bash
-node /Users/danielvazquez/Documents/Codex/2026-09-11/nec/outputs/ai-prompts-capture-extension/tools/validate-run-offline.mjs "/Users/danielvazquez/Desktop/Connect exports/runs/<run-id>"
+node tools/validate-run-offline.mjs "/path/to/Connect exports/runs/<run-id>"
 ```
 
 It writes:

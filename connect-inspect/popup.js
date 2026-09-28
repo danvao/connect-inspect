@@ -40,6 +40,8 @@ const state = {
   latestDiagnosticsReport: null,
   scanRunning: false,
   stopRequested: false,
+  runAbortController: null,
+  runScopeDepth: 0,
   callQueue: null,
   pendingCsvAutomation: null,
   archiveRawRuns: true,
@@ -50,6 +52,7 @@ const state = {
 };
 
 const els = {
+  appVersion: document.getElementById("appVersion"),
   sectionBadge: document.getElementById("sectionBadge"),
   currentUrl: document.getElementById("currentUrl"),
   detectedSection: document.getElementById("detectedSection"),
@@ -101,12 +104,16 @@ const els = {
   runTrackerPanel: document.getElementById("runTrackerPanel"),
   runTrackerStatus: document.getElementById("runTrackerStatus"),
   runTrackerProgress: document.getElementById("runTrackerProgress"),
-  runTrackerDetails: document.getElementById("runTrackerDetails")
+  runTrackerDetails: document.getElementById("runTrackerDetails"),
+  contextActionTitle: document.getElementById("contextActionTitle"),
+  actionIssueButton: document.getElementById("actionIssueButton"),
+  actionIssueDetails: document.getElementById("actionIssueDetails")
 };
 
 init();
 
 async function init() {
+  els.appVersion.textContent = `v${chrome.runtime.getManifest().version}`;
   bindEvents();
   bindTabRefreshEvents();
   await lockToInitialTab();
@@ -159,7 +166,8 @@ function bindEvents() {
   els.captureIndex.addEventListener("click", () => runCapture("CAPTURE_INDEX"));
   els.captureAllIndex.addEventListener("click", () => runCapture("CAPTURE_ALL_INDEX"));
   els.captureDetail.addEventListener("click", () => runCapture("CAPTURE_DETAIL"));
-  els.captureNetworkTranscript.addEventListener("click", () => runCapture("CAPTURE_NETWORK_TRANSCRIPT"));
+  els.captureNetworkTranscript.addEventListener("click", () => runCapture("CAPTURE_NETWORK_TRANSCRIPT", { requireTranscript: true }));
+  els.actionIssueButton.addEventListener("click", toggleActionIssueDetails);
   els.identifyVersions.addEventListener("click", identifyVersions);
   els.exportFlowJson.addEventListener("click", () => runCapture("EXPORT_FLOW_JSON", { download: false }));
   els.exportContactSearchCsv.addEventListener("click", () => runCapture("EXPORT_CONTACT_SEARCH_CSV", { download: true }));
@@ -994,11 +1002,13 @@ function bindTabRefreshEvents() {
 
 async function navigateTo(path, options = {}) {
   try {
+    if (!options.ignoreRunAbort) throwIfRunAborted();
     const tab = await getLockedTab();
     const destination = new URL(path, "https://invest-america.my.connect.aws").href;
     if (!options.silent) printResult({ status: "Navigating", destination });
     await chrome.tabs.update(tab.id, { url: destination });
-    await waitForTabLoad(tab.id);
+    await (options.ignoreRunAbort ? waitForTabLoad(tab.id) : runAbortable(waitForTabLoad(tab.id)));
+    if (!options.ignoreRunAbort) throwIfRunAborted();
     await detectPage({ silent: options.silent });
     return true;
   } catch (error) {
@@ -1037,6 +1047,7 @@ async function detectPage(options = {}) {
     els.detectedSection.textContent = `${response.detected.section} / ${response.detected.mode}`;
     els.sectionBadge.textContent = response.detected.section;
     setButtons(response.detected);
+    if (response.detected.section === "contact-records") setActiveView("analytics");
     if (!silent) {
       printResult({ status: "Ready", detected: response.detected, title: response.title });
     }
@@ -1077,7 +1088,7 @@ function setButtons(detected) {
   els.validateLastRun.disabled = state.scanRunning;
   els.runDiagnostics.disabled = state.scanRunning;
   els.downloadDiagnostics.disabled = !state.latestDiagnosticsReport;
-  els.stopRun.disabled = !state.scanRunning || state.stopRequested;
+  els.stopRun.disabled = (!state.scanRunning && !state.pendingCsvAutomation) || state.stopRequested;
   els.captureIndex.disabled = !supportsIndex;
   els.captureAllIndex.disabled = !supportsIndex;
   els.captureDetail.disabled = !supportsDetail;
@@ -1101,6 +1112,67 @@ function setButtons(detected) {
   els.buildAnalyticsDashboard.disabled = state.scanRunning;
   els.startWeeklyLongRun.disabled = state.scanRunning;
   els.runImportedCsvAutomation.disabled = state.scanRunning;
+  updateContextActions(detected, { supportsDetail, supportsNetworkTranscript });
+}
+
+function updateContextActions(detected, capabilities = {}) {
+  const { supportsDetail = false, supportsNetworkTranscript = false } = capabilities;
+  const labels = {
+    "ai-prompts": "Download this AI prompt",
+    "ai-agents": "Download this AI agent",
+    "guardrails": "Download this guardrail",
+    "contact-flows": "Download this contact flow",
+    "flow-modules": "Download this flow module",
+    "conversational-ai": "Download this conversational AI detail",
+    "phone-numbers": "Download this phone number",
+    "queues": "Download this queue",
+    "hours-of-operation": "Download these operating hours",
+    "contact-records": "Download these call details"
+  };
+
+  const currentLabel = labels[detected.section] || "Download current detail";
+  els.captureDetail.textContent = currentLabel;
+  els.contextActionTitle.textContent = supportsDetail
+    ? `${detected.section} / ${detected.mode}`
+    : detected.mode === "index"
+      ? "Open an item from this list"
+      : "No supported detail detected";
+  els.captureNetworkTranscript.classList.toggle("hidden", !supportsNetworkTranscript);
+
+  if (!supportsDetail) {
+    showActionIssue(
+      detected.mode === "index"
+        ? "Open an item from the current list. The download button becomes available on its detail page."
+        : "Navigate to a supported Amazon Connect detail page, then try again.",
+      { label: "What do I need to do?", expanded: false }
+    );
+  } else if (els.actionIssueButton.dataset.issueKind !== "operation") {
+    clearActionIssue();
+  }
+}
+
+function toggleActionIssueDetails() {
+  const expanded = els.actionIssueButton.getAttribute("aria-expanded") === "true";
+  els.actionIssueButton.setAttribute("aria-expanded", String(!expanded));
+  els.actionIssueDetails.classList.toggle("hidden", expanded);
+}
+
+function showActionIssue(message, options = {}) {
+  const { label = "Action required", expanded = true, kind = "context" } = options;
+  els.actionIssueButton.textContent = label;
+  els.actionIssueButton.dataset.issueKind = kind;
+  els.actionIssueButton.classList.remove("hidden");
+  els.actionIssueButton.setAttribute("aria-expanded", String(expanded));
+  els.actionIssueDetails.textContent = message;
+  els.actionIssueDetails.classList.toggle("hidden", !expanded);
+}
+
+function clearActionIssue() {
+  els.actionIssueButton.classList.add("hidden");
+  els.actionIssueButton.removeAttribute("data-issue-kind");
+  els.actionIssueButton.setAttribute("aria-expanded", "false");
+  els.actionIssueDetails.textContent = "";
+  els.actionIssueDetails.classList.add("hidden");
 }
 
 function readCustomCallLimit() {
@@ -1110,13 +1182,108 @@ function readCustomCallLimit() {
 }
 
 function requestStopRun() {
-  state.stopRequested = true;
+  if (!state.scanRunning && !state.pendingCsvAutomation) return;
+  const activeRun = state.scanRunning;
+  const canceledPendingCsvAutomation = Boolean(state.pendingCsvAutomation);
+  state.pendingCsvAutomation = null;
+  state.stopRequested = activeRun;
+  if (state.runAbortController && !state.runAbortController.signal.aborted) {
+    state.runAbortController.abort(new RunAbortedError("Automatic run aborted by user."));
+  }
   updateRunTracker({
-    status: "running",
-    message: "Stop requested. The current item will finish first.",
-    summary: { stopRequested: true }
+    status: "aborted",
+    stage: "aborted",
+    completedAt: new Date().toISOString(),
+    message: "Automatic run aborted by user.",
+    summary: { abortedByUser: true, canceledPendingCsvAutomation }
   });
   setButtons(state.detected || { section: "unknown", mode: "unknown" });
+}
+
+class RunAbortedError extends Error {
+  constructor(message = "Automatic run aborted by user.") {
+    super(message);
+    this.name = "RunAbortedError";
+  }
+}
+
+class OutputFolderUnavailableError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "OutputFolderUnavailableError";
+  }
+}
+
+function beginAutomaticRun() {
+  const owner = state.runScopeDepth === 0;
+  if (owner) {
+    state.stopRequested = false;
+    state.runAbortController = new AbortController();
+  }
+  state.runScopeDepth += 1;
+  state.scanRunning = true;
+  return owner;
+}
+
+function endAutomaticRun(owner) {
+  state.runScopeDepth = Math.max(0, state.runScopeDepth - 1);
+  if (owner) {
+    state.runScopeDepth = 0;
+    state.scanRunning = false;
+    state.stopRequested = false;
+    state.runAbortController = null;
+  } else {
+    state.scanRunning = state.runScopeDepth > 0;
+  }
+}
+
+function throwIfRunAborted() {
+  const signal = state.runAbortController?.signal;
+  if (!state.stopRequested && !signal?.aborted) return;
+  const reason = signal?.reason;
+  if (reason instanceof Error) throw reason;
+  throw new RunAbortedError();
+}
+
+function isRunAbortedError(error) {
+  return error?.name === "RunAbortedError" || /automatic run aborted by user/i.test(error?.message || "");
+}
+
+function isOutputFolderUnavailableError(error) {
+  return error?.name === "OutputFolderUnavailableError";
+}
+
+function runAbortable(promise) {
+  const signal = state.runAbortController?.signal;
+  if (!signal) return Promise.resolve(promise);
+  if (signal.aborted) return Promise.reject(signal.reason instanceof Error ? signal.reason : new RunAbortedError());
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(signal.reason instanceof Error ? signal.reason : new RunAbortedError());
+    signal.addEventListener("abort", onAbort, { once: true });
+    Promise.resolve(promise).then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      }
+    );
+  });
+}
+
+async function requireWritableOutputFolder() {
+  const handle = await ensureOutputDirectoryHandle({ requestPermission: false });
+  if (!handle) {
+    throw new OutputFolderUnavailableError("Automatic runs require a connected output folder. Click Choose output folder, select Connect exports, and start the run again.");
+  }
+  try {
+    await testOutputFolderWrite();
+  } catch (error) {
+    disconnectOutputFolderAfterWriteFailure();
+    throw new OutputFolderUnavailableError(`${friendlySaveWarning(error)} The automatic run was not started.`);
+  }
 }
 
 async function sendToContent(type, payload = {}) {
@@ -1137,23 +1304,60 @@ async function sendToContent(type, payload = {}) {
 
 async function runCapture(type, options = {}) {
   try {
+    clearActionIssue();
     const report = createExportReport(type);
     const result = await captureFromContent(type);
+    if (options.requireTranscript && !result.transcript) {
+      throw new Error(result.note || "No transcript data was available for this contact.");
+    }
     state.lastResult = result;
     state.lastBaseName = buildBaseName(result);
     if (options.download !== false) {
-      await downloadCapture(result, state.lastBaseName, report);
-      await saveExportReport(report);
+      const compactManualCapture = ["CAPTURE_DETAIL", "CAPTURE_NETWORK_TRANSCRIPT"].includes(type);
+      await downloadCapture(result, state.lastBaseName, report, { compactManualCapture });
+      await saveExportReport(report, result, { compact: compactManualCapture });
       els.downloadLast.disabled = false;
     }
     renderVersions(result.versions || []);
-    printResult(summarizeResult(result));
+    printResult(result.contactTranscript ? summarizeContactTranscript(result.contactTranscript) : summarizeResult(result));
+    return result;
   } catch (error) {
+    showActionIssue(actionGuidanceForError(error, type), {
+      label: "Download needs attention",
+      expanded: true,
+      kind: "operation"
+    });
     setError(error);
+    if (state.runScopeDepth > 0) throw error;
+    return null;
   }
 }
 
+function actionGuidanceForError(error, type) {
+  const message = friendlyErrorMessage(error);
+  if (type === "CAPTURE_NETWORK_TRANSCRIPT") {
+    if (/No contact ID/i.test(message)) {
+      return "Open a Contact details page first. The URL must contain the contact ID, then press Download call transcript again.";
+    }
+    if (/No transcript|not been observed|Could not fetch transcript|transcript data/i.test(message)) {
+      return "Keep the extension open, reload this Contact details page, and wait until the transcript or analysis finishes loading. Then press Download call transcript again. If the contact has no voice analytics transcript, use Import transcript JSON when a JSON export is available.";
+    }
+  }
+  if (/output folder|file or directory|permission|notfound|notallowed|security/i.test(message)) {
+    return "Open Storage and diagnostics, choose the output folder again, and retry this download. Chrome must have write permission for that folder.";
+  }
+  if (/Receiving end does not exist|Could not establish connection|content script/i.test(message)) {
+    return "Reload the Amazon Connect page with the extension open, wait for the page to finish loading, and retry the download.";
+  }
+  if (/detail|supported Amazon Connect/i.test(message)) {
+    return "Open the item itself rather than its index list, wait for the detail page to load, and retry.";
+  }
+  return `The download did not complete. ${message}`;
+}
+
 async function startWeeklyLongRun() {
+  const runOwner = beginAutomaticRun();
+  startRunTracker("START_WEEKLY_FULL_RUN", 1);
   try {
     state.pendingCsvAutomation = {
       type: "weekly-full-run",
@@ -1163,6 +1367,8 @@ async function startWeeklyLongRun() {
     };
     state.archiveRawRuns = false;
     if (els.archiveRawRuns) els.archiveRawRuns.checked = false;
+    setButtons(state.detected || { section: "unknown", mode: "unknown" });
+    if (runOwner) await requireWritableOutputFolder();
     setActiveView("analytics");
     printResult({
       status: "Starting weekly full run",
@@ -1179,14 +1385,29 @@ async function startWeeklyLongRun() {
       nextStep: "Import the downloaded Contact Search CSV to continue the automatic run.",
       pendingAutomation: state.pendingCsvAutomation
     });
+    updateRunTracker({
+      status: "waiting",
+      stage: "waiting-csv-import",
+      message: "Waiting for Contact CSV import"
+    });
   } catch (error) {
     state.pendingCsvAutomation = null;
-    setError(error);
+    if (isRunAbortedError(error)) {
+      printResult({ status: "Weekly run setup aborted", reason: error.message });
+    } else {
+      failRunTracker(error);
+      setError(error);
+    }
+  } finally {
+    endAutomaticRun(runOwner);
+    setButtons(state.detected || { section: "unknown", mode: "unknown" });
   }
 }
 
 async function captureFromContent(type, payload = {}) {
-  const response = await sendToContent(type, payload);
+  throwIfRunAborted();
+  const response = await runAbortable(sendToContent(type, payload));
+  throwIfRunAborted();
   if (!response?.ok) throw new Error(response?.error || "Capture failed.");
   return enrichResult(response.result);
 }
@@ -1263,7 +1484,7 @@ function renderRunTracker() {
   if (!run || !els.runTrackerPanel) return;
   els.runTrackerPanel.classList.remove("hidden", "trackerSuccess", "trackerWarning", "trackerError");
   if (run.status === "success") els.runTrackerPanel.classList.add("trackerSuccess");
-  if (run.status === "warning") els.runTrackerPanel.classList.add("trackerWarning");
+  if (["warning", "aborted"].includes(run.status)) els.runTrackerPanel.classList.add("trackerWarning");
   if (run.status === "failed") els.runTrackerPanel.classList.add("trackerError");
 
   const sectionText = run.totalSections
@@ -1290,7 +1511,7 @@ function renderRunTracker() {
 }
 
 function calculateRunProgress(run) {
-  if (["success", "warning", "failed"].includes(run.status)) return 100;
+  if (["success", "warning", "failed", "aborted"].includes(run.status)) return 100;
   const totalSections = Math.max(1, run.totalSections || 1);
   const sectionIndex = Math.max(0, (run.sectionIndex || 1) - 1);
   const stageWeight = {
@@ -1366,7 +1587,7 @@ async function returnHomeAfterRun() {
   if (shouldShowReturning) {
     updateRunTracker({ stage: "returning-home", message: "Returning to Amazon Connect home" });
   }
-  await navigateTo("/home", { silent: true });
+  await navigateTo("/home", { silent: true, ignoreRunAbort: true });
   await detectPage({ silent: true });
 }
 
@@ -1389,18 +1610,15 @@ async function scanSections({ detailLimit, kind }) {
     warnings: []
   };
   const report = createExportReport(kind);
+  const runOwner = beginAutomaticRun();
 
-  state.scanRunning = true;
-  state.stopRequested = false;
   startRunTracker(kind, sections.length);
   setButtons(state.detected || { section: "unknown", mode: "unknown" });
 
   try {
+    if (runOwner) await requireWritableOutputFolder();
     for (const [sectionIndex, section] of sections.entries()) {
-      if (state.stopRequested) {
-        run.warnings.push("Run stopped by user.");
-        break;
-      }
+      throwIfRunAborted();
       updateRunTracker({
         sectionIndex: sectionIndex + 1,
         sectionLabel: section.label,
@@ -1465,10 +1683,7 @@ async function scanSections({ detailLimit, kind }) {
       };
 
       for (const [detailIndex, target] of detailTargets.entries()) {
-        if (state.stopRequested) {
-          run.warnings.push("Run stopped by user before finishing all detail targets.");
-          break;
-        }
+        throwIfRunAborted();
         const item = target.item;
         updateRunTracker({
           stage: "opening-detail",
@@ -1568,11 +1783,15 @@ async function scanSections({ detailLimit, kind }) {
     state.lastBaseName = `amazon-connect-${run.mode}-failed-${timestampSlug()}`;
     await saveTextFile(`${report.runFolder}/scan-failed.json`, jsonText(run), "application/json", report).catch(() => {});
     await saveExportReport(report, run).catch(() => {});
-    failRunTracker(error, report.validation || validateReport(report, run));
-    setError(error);
+    if (isRunAbortedError(error)) {
+      printResult({ status: "Automatic run aborted", reason: error.message, completedSections: run.sections.length });
+    } else {
+      failRunTracker(error, report.validation || validateReport(report, run));
+      setError(error);
+    }
+    if (!runOwner) throw error;
   } finally {
-    state.scanRunning = false;
-    state.stopRequested = false;
+    endAutomaticRun(runOwner);
     await returnHomeAfterRun().catch(() => {});
     setButtons(state.detected || { section: "unknown", mode: "unknown" });
   }
@@ -1589,18 +1808,15 @@ async function validationScreenshotScan() {
     warnings: []
   };
   const report = createExportReport("VALIDATION_SCREENSHOTS");
+  const runOwner = beginAutomaticRun();
 
-  state.scanRunning = true;
-  state.stopRequested = false;
   startRunTracker("VALIDATION_SCREENSHOTS", sections.length);
   setButtons(state.detected || { section: "unknown", mode: "unknown" });
 
   try {
+    if (runOwner) await requireWritableOutputFolder();
     for (const [sectionIndex, section] of sections.entries()) {
-      if (state.stopRequested) {
-        run.warnings.push("Run stopped by user.");
-        break;
-      }
+      throwIfRunAborted();
       updateRunTracker({
         sectionIndex: sectionIndex + 1,
         sectionLabel: section.label,
@@ -1662,10 +1878,7 @@ async function validationScreenshotScan() {
       if (detailTargets.length) {
         run.expectedScreenshots += detailTargets.length;
         for (const [detailIndex, target] of detailTargets.entries()) {
-          if (state.stopRequested) {
-            run.warnings.push("Run stopped by user before finishing all validation detail targets.");
-            break;
-          }
+          throwIfRunAborted();
           const item = target.item;
           updateRunTracker({
             stage: "opening-detail",
@@ -1772,11 +1985,15 @@ async function validationScreenshotScan() {
     state.lastBaseName = `amazon-connect-validation-screenshots-failed-${timestampSlug()}`;
     await saveTextFile(`${report.runFolder}/validation-failed.json`, jsonText(run), "application/json", report).catch(() => {});
     await saveExportReport(report, run).catch(() => {});
-    failRunTracker(error, report.validation || validateReport(report, run, { expectedScreenshots: run.expectedScreenshots || sections.length * 2 }));
-    setError(error);
+    if (isRunAbortedError(error)) {
+      printResult({ status: "Validation run aborted", reason: error.message, completedSections: run.sections.length });
+    } else {
+      failRunTracker(error, report.validation || validateReport(report, run, { expectedScreenshots: run.expectedScreenshots || sections.length * 2 }));
+      setError(error);
+    }
+    if (!runOwner) throw error;
   } finally {
-    state.scanRunning = false;
-    state.stopRequested = false;
+    endAutomaticRun(runOwner);
     await returnHomeAfterRun().catch(() => {});
     setButtons(state.detected || { section: "unknown", mode: "unknown" });
   }
@@ -1811,6 +2028,7 @@ async function trySaveVisibleScreenshot(filename, report = null, label = "screen
   try {
     return await saveVisibleScreenshot(filename, report);
   } catch (error) {
+    if (isRunAbortedError(error) || isOutputFolderUnavailableError(error)) throw error;
     const message = `Screenshot failed for ${label}: ${error?.message || String(error)}`;
     if (report) report.warnings.push(message);
     return {
@@ -1841,6 +2059,7 @@ async function trySaveVisibleTextSnapshot(filename, report = null, label = "scre
   try {
     return await saveVisibleTextSnapshot(filename, report);
   } catch (error) {
+    if (isRunAbortedError(error) || isOutputFolderUnavailableError(error)) throw error;
     const message = `Visible text snapshot failed for ${label}: ${error?.message || String(error)}`;
     if (report) report.warnings.push(message);
     return {
@@ -1915,7 +2134,9 @@ function legacyDetailUrlForItem(item, section) {
 }
 
 async function waitForPageReady(expected) {
-  const response = await sendToContent("WAIT_FOR_PAGE_READY", { expected });
+  throwIfRunAborted();
+  const response = await runAbortable(sendToContent("WAIT_FOR_PAGE_READY", { expected }));
+  throwIfRunAborted();
   if (!response?.ok) {
     return {
       ready: false,
@@ -1927,11 +2148,13 @@ async function waitForPageReady(expected) {
 }
 
 async function ensureRuntimeSectionActive(section) {
+  throwIfRunAborted();
   if (!["contact-flows", "flow-modules", "conversational-ai"].includes(section.section)) return null;
   if (state.currentRun?.status === "running") {
     updateRunTracker({ stage: "activating-tab", message: `Activating ${section.label} tab` });
   }
-  const response = await sendToContent("ACTIVATE_FLOWS_TAB", { section: section.section });
+  const response = await runAbortable(sendToContent("ACTIVATE_FLOWS_TAB", { section: section.section }));
+  throwIfRunAborted();
   if (!response?.ok) {
     return {
       activated: false,
@@ -2028,8 +2251,19 @@ function buildScanSummary(result) {
   };
 }
 
-async function downloadCapture(result, baseName, report = null) {
+async function downloadCapture(result, baseName, report = null, options = {}) {
   const runBasePath = captureRunBasePath(result, baseName, report);
+  const configurationArtifact = buildConfigurationArtifact(result);
+  if (options.compactManualCapture) {
+    if (result.contactTranscript?.contactId) {
+      await saveNormalizedContactTranscript(result, report);
+      return;
+    }
+    if (isDetailResult(result)) {
+      await saveNormalizedCapture(result, report, { includeSummary: false });
+      return;
+    }
+  }
   const shouldArchiveRawRun = state.archiveRawRuns || result.source?.section !== "contact-records";
   if (shouldArchiveRawRun) {
     await saveTextFile(`${runBasePath}.json`, jsonText(result), "application/json", report);
@@ -2041,6 +2275,10 @@ async function downloadCapture(result, baseName, report = null) {
 
   if (result.scanSummary) {
     await saveTextFile(`${runBasePath}-summary.json`, jsonText(result.scanSummary), "application/json", report);
+  }
+
+  if (configurationArtifact) {
+    await saveTextFile(`${runBasePath}-configuration.json`, jsonText(configurationArtifact), "application/json", report);
   }
 
   if (result.prompt?.yaml) {
@@ -2071,7 +2309,7 @@ function captureRunBasePath(result, baseName, report) {
   return `${report.runFolder}/${baseName}`;
 }
 
-async function saveNormalizedCapture(result, report) {
+async function saveNormalizedCapture(result, report, options = {}) {
   if (!report?.runFolder) return;
   const section = sanitizePathSegment(result.source?.section || "amazon-connect");
   const capturedAtSlug = timestampSlug(new Date(result.capturedAt || Date.now()));
@@ -2093,12 +2331,105 @@ async function saveNormalizedCapture(result, report) {
   const versionSlug = versionSlugForResult(result);
   const detailBasePath = `${section}/${resourceSlug}/${versionSlug}`;
   await saveTextFile(`${detailBasePath}.json`, jsonText(result), "application/json", report);
-  if (result.scanSummary) {
+  const configurationArtifact = buildConfigurationArtifact(result);
+  if (configurationArtifact) {
+    await saveTextFile(`${detailBasePath}-configuration.json`, jsonText(configurationArtifact), "application/json", report);
+  }
+  if (result.scanSummary && options.includeSummary !== false) {
     await saveTextFile(`${detailBasePath}-summary.json`, jsonText(result.scanSummary), "application/json", report);
   }
   if (result.prompt?.yaml) {
     await saveTextFile(`${detailBasePath}-prompt.yaml`, result.prompt.yaml, "text/yaml", report);
   }
+}
+
+function buildConfigurationArtifact(result) {
+  const section = result.source?.section;
+  if (!result.guardrail && !result.agent) return null;
+  const overview = result.overview || {};
+  const base = {
+    schemaVersion: 1,
+    capturedAt: result.capturedAt || new Date().toISOString(),
+    source: result.source || {},
+    resourceType: section,
+    resourceId: overview.aIGuardrailID || overview.aIAgentID || overview.idFromUrl || "",
+    resourceArn: overview.aIGuardrailARN || overview.aIAgentARN || "",
+    name: overview.name || result.title || "",
+    description: overview.description || "",
+    status: overview.status || "",
+    type: overview.type || "",
+    locale: overview.locale || "",
+    lastModified: overview.lastModified || "",
+    assistantId: overview.assistantID || "",
+    assistantArn: overview.assistantARN || "",
+    validation: {
+      status: result.warnings?.length ? "warning" : "complete",
+      warnings: result.warnings || []
+    }
+  };
+
+  if (section === "guardrails") {
+    const guardrail = result.guardrail || {};
+    return {
+      ...base,
+      configuration: {
+        contentFilters: guardrail.contentFiltersParsed || {},
+        deniedTopics: Array.isArray(guardrail.deniedTopics) ? guardrail.deniedTopics : [],
+        deniedTopicCount: Number.isInteger(guardrail.deniedTopicCount) ? guardrail.deniedTopicCount : null,
+        deniedTopicsText: guardrail.deniedTopicsText || "",
+        wordFilters: guardrail.wordFiltersParsed || {},
+        wordFiltersText: guardrail.wordFiltersText || "",
+        sensitiveInformationTypes: guardrail.sensitiveInformationTypes || [],
+        sensitiveInformationTypeCount: Number.isInteger(guardrail.sensitiveInformationTypeCount) ? guardrail.sensitiveInformationTypeCount : null,
+        sensitiveInformationText: guardrail.sensitiveInformationText || "",
+        contextualGrounding: guardrail.contextualGroundingParsed || {},
+        contextualGroundingText: guardrail.contextualGroundingText || "",
+        blockedMessaging: guardrail.blockedMessagingParsed || {},
+        blockedMessagingText: guardrail.blockedMessagingText || ""
+      },
+      versions: mergeGuardrailVersions(guardrail.versions || [], result.versions || [])
+    };
+  }
+
+  const agent = result.agent || {};
+  return {
+    ...base,
+    configuration: {
+      prompts: agent.prompts || [],
+      tools: agent.tools || [],
+      securityProfiles: agent.securityProfiles || [],
+      relatedGuardrails: agent.relatedGuardrails || []
+    },
+    versions: agent.versions || result.versions || []
+  };
+}
+
+function mergeGuardrailVersions(tableVersions, detectedVersions) {
+  const byVersion = new Map();
+
+  for (const item of tableVersions) {
+    const version = String(item?.version || item?.label || "").trim();
+    if (version) byVersion.set(version.toLowerCase(), { ...item, version });
+  }
+
+  for (const item of detectedVersions) {
+    const label = String(item?.label || item?.version || "").trim();
+    if (!label) continue;
+    const latestMatch = label.match(/^Latest:\s*(.+)$/i);
+    const numberedMatch = label.match(/^(Version\s+\d+)/i);
+    const version = latestMatch?.[1]?.trim() || numberedMatch?.[1] || label;
+    const key = version.toLowerCase();
+    const existing = byVersion.get(key) || {};
+    byVersion.set(key, {
+      ...item,
+      ...existing,
+      version,
+      label,
+      isLatest: Boolean(item?.isLatest || latestMatch)
+    });
+  }
+
+  return [...byVersion.values()].sort((a, b) => Number(Boolean(b.isLatest)) - Number(Boolean(a.isLatest)));
 }
 
 function resourceSlugForResult(result) {
@@ -2305,6 +2636,7 @@ async function importContactSearchCsv(event) {
 
     const report = createExportReport("IMPORT_CONTACT_SEARCH_CSV");
     const saveWarnings = [];
+    let saveFailure = null;
     try {
       await ensureOutputDirectoryHandle({ requestPermission: true });
       await saveTextFile(`${report.runFolder}/${state.lastBaseName}.json`, jsonText(contactIndex), "application/json", report);
@@ -2313,6 +2645,7 @@ async function importContactSearchCsv(event) {
       await saveTextFile(`contact-search/queues/latest-call-queue.json`, jsonText(queue), "application/json", report);
       await saveExportReport(report, contactIndex);
     } catch (saveError) {
+      saveFailure = saveError;
       saveWarnings.push(`Import succeeded, but saving files failed: ${friendlyErrorMessage(saveError)}`);
       report.warnings.push(...saveWarnings);
     }
@@ -2334,6 +2667,9 @@ async function importContactSearchCsv(event) {
     if (state.pendingCsvAutomation) {
       const automation = state.pendingCsvAutomation;
       state.pendingCsvAutomation = null;
+      if (saveFailure) {
+        throw new OutputFolderUnavailableError("Contact CSV was parsed, but the automatic run was not started because its files could not be written. Reconnect the output folder, import the CSV again, and retry.");
+      }
       await runImportedCsvAutomation(automation);
     }
   } catch (error) {
@@ -2423,7 +2759,11 @@ async function ensureCallQueue() {
 
 async function captureCallQueue({ limit = 1 } = {}) {
   const report = createExportReport(limit === 1 ? "CAPTURE_NEXT_CALL" : `CAPTURE_${limit}_CALLS`);
+  const runOwner = beginAutomaticRun();
+  startRunTracker(report.kind, limit);
+  setButtons(state.detected || { section: "unknown", mode: "unknown" });
   try {
+    if (runOwner) await requireWritableOutputFolder();
     const queue = await ensureCallQueue();
     const pending = queue.contacts.filter((contact) => contact.status === "pending").slice(0, limit);
     if (!pending.length) {
@@ -2436,16 +2776,11 @@ async function captureCallQueue({ limit = 1 } = {}) {
       throw new Error(`No pending contacts in the current queue: ${queueStatusText(summary, skippedBreakdown)}.${resetHint}`);
     }
 
-    state.scanRunning = true;
-    state.stopRequested = false;
-    startRunTracker(report.kind, pending.length);
+    updateRunTracker({ totalSections: pending.length });
     const results = [];
     const runStartedAt = Date.now();
     for (const [index, contact] of pending.entries()) {
-      if (state.stopRequested) {
-        results.push({ status: "stopped", reason: "Run stopped by user." });
-        break;
-      }
+      throwIfRunAborted();
       const itemStartedAt = Date.now();
       updateRunTracker({
         status: "running",
@@ -2498,6 +2833,11 @@ async function captureCallQueue({ limit = 1 } = {}) {
           usedNavigationFallback: contact.usedNavigationFallback
         });
       } catch (error) {
+        if (isRunAbortedError(error) || isOutputFolderUnavailableError(error)) {
+          contact.status = "pending";
+          contact.interruptedAt = new Date().toISOString();
+          throw error;
+        }
         contact.status = "failed";
         contact.error = error.message || String(error);
         contact.failedAt = new Date().toISOString();
@@ -2548,11 +2888,15 @@ async function captureCallQueue({ limit = 1 } = {}) {
     });
     printResult(queueReport);
   } catch (error) {
-    failRunTracker(error);
-    setError(error);
+    if (isRunAbortedError(error)) {
+      printResult({ status: "Call capture aborted", reason: error.message });
+    } else {
+      failRunTracker(error);
+      setError(error);
+    }
+    if (!runOwner) throw error;
   } finally {
-    state.scanRunning = false;
-    state.stopRequested = false;
+    endAutomaticRun(runOwner);
     setButtons(state.detected || { section: "unknown", mode: "unknown" });
   }
 }
@@ -2766,6 +3110,7 @@ async function buildAnalyticsDashboardFromQueue() {
     });
   } catch (error) {
     setError(error);
+    if (state.runScopeDepth > 0) throw error;
   }
 }
 
@@ -2774,7 +3119,11 @@ async function runImportedCsvAutomation(options = {}) {
     includeConfigExport = true,
     captureAllPending = true
   } = options;
+  const runOwner = beginAutomaticRun();
+  startRunTracker("AUTOMATIC_IMPORTED_CSV_RUN", 4);
+  setButtons(state.detected || { section: "unknown", mode: "unknown" });
   try {
+    if (runOwner) await requireWritableOutputFolder();
     const queue = await ensureCallQueue();
     updateQueueStatus(queue);
     const initialValidation = validateCallQueueState(queue);
@@ -2791,10 +3140,12 @@ async function runImportedCsvAutomation(options = {}) {
     });
 
     await buildAnalyticsDashboardFromQueue();
+    throwIfRunAborted();
 
     if (includeConfigExport) {
       await scanSections({ detailLimit: null, kind: "FULL_CONFIG_EXPORT" });
     }
+    throwIfRunAborted();
 
     if (captureAllPending) {
       const nextQueue = await ensureCallQueue();
@@ -2808,8 +3159,10 @@ async function runImportedCsvAutomation(options = {}) {
         });
       }
     }
+    throwIfRunAborted();
 
     await buildAnalyticsDashboardFromQueue();
+    throwIfRunAborted();
     const finalQueue = await ensureCallQueue();
     const finalValidation = validateCallQueueState(finalQueue);
     completeRunTracker({
@@ -2825,8 +3178,16 @@ async function runImportedCsvAutomation(options = {}) {
       validation: finalValidation
     });
   } catch (error) {
-    failRunTracker(error);
-    setError(error);
+    if (isRunAbortedError(error)) {
+      printResult({ status: "Automatic run aborted", reason: error.message });
+    } else {
+      failRunTracker(error);
+      setError(error);
+    }
+  } finally {
+    endAutomaticRun(runOwner);
+    await returnHomeAfterRun().catch(() => {});
+    setButtons(state.detected || { section: "unknown", mode: "unknown" });
   }
 }
 
@@ -2890,15 +3251,26 @@ function createExportReport(kind) {
     startedAt: startedAt.toISOString(),
     completedAt: "",
     runFolder: `runs/${timestampSlug(startedAt)}-${kindSlug}`,
-    outputTarget: state.outputTargetLabel,
+    outputTarget: activeOutputTargetLabel(),
     files: [],
     summary: {},
     warnings: []
   };
 }
 
+function activeOutputTargetLabel() {
+  return state.outputDirectoryHandle
+    ? (state.outputDirectoryHandle.name || state.outputTargetLabel || "Selected folder")
+    : "Chrome downloads";
+}
+
 async function saveTextFile(filename, content, mimeType, report = null, options = {}) {
+  if (state.runScopeDepth > 0) throwIfRunAborted();
   const text = String(content ?? "");
+  const usingOutputDirectory = Boolean(state.outputDirectoryHandle);
+  if (!usingOutputDirectory && state.runScopeDepth > 0) {
+    throw new OutputFolderUnavailableError(`Could not save ${filename}. The selected output folder is disconnected. The run was stopped; no fallback file was sent to Downloads.`);
+  }
   const record = {
     filename,
     savedFilename: filename,
@@ -2906,8 +3278,8 @@ async function saveTextFile(filename, content, mimeType, report = null, options 
     bytes: new TextEncoder().encode(text).byteLength,
     sha256: await sha256Hex(text),
     savedAt: new Date().toISOString(),
-    target: state.outputTargetLabel,
-    method: state.outputDirectoryHandle ? "file-system-access" : "chrome-downloads"
+    target: activeOutputTargetLabel(),
+    method: usingOutputDirectory ? "file-system-access" : "chrome-downloads"
   };
 
   try {
@@ -2926,20 +3298,18 @@ async function saveTextFile(filename, content, mimeType, report = null, options 
       );
     }
   } catch (error) {
-    record.method = "chrome-downloads-fallback";
-    record.warning = friendlySaveWarning(error);
-    if (report) report.warnings.push(record.warning);
-    disconnectOutputFolderAfterWriteFailure();
-    record.savedFilename = sanitizeOutputFilename(filename);
-    try {
-      await withTimeout(
-        downloadText(record.savedFilename, text, mimeType),
-        SAVE_TIMEOUT_MS,
-        `Timed out while downloading ${record.savedFilename}`
-      );
-    } catch (downloadError) {
-      throw new Error(`Could not save ${filename}. ${friendlySaveWarning(error)} Fallback download also failed: ${downloadError?.message || String(downloadError)}`);
+    if (usingOutputDirectory) {
+      record.warning = friendlySaveWarning(error);
+      if (report) report.warnings.push(record.warning);
+      disconnectOutputFolderAfterWriteFailure();
+      const folderError = new OutputFolderUnavailableError(`Could not save ${filename}. ${record.warning} The run was stopped; no fallback file was sent to Downloads.`);
+      if (state.runAbortController && !state.runAbortController.signal.aborted) {
+        state.stopRequested = true;
+        state.runAbortController.abort(folderError);
+      }
+      throw folderError;
     }
+    throw new Error(`Could not download ${record.savedFilename}. ${error?.message || String(error)}`);
   }
 
   if (report && !options.skipReportRecord) {
@@ -2950,7 +3320,12 @@ async function saveTextFile(filename, content, mimeType, report = null, options 
 }
 
 async function saveDataUrlFile(filename, dataUrl, mimeType, report = null, options = {}) {
+  if (state.runScopeDepth > 0) throwIfRunAborted();
   const blob = await dataUrlToBlob(dataUrl);
+  const usingOutputDirectory = Boolean(state.outputDirectoryHandle);
+  if (!usingOutputDirectory && state.runScopeDepth > 0) {
+    throw new OutputFolderUnavailableError(`Could not save ${filename}. The selected output folder is disconnected. The run was stopped; no fallback file was sent to Downloads.`);
+  }
   const record = {
     filename,
     savedFilename: filename,
@@ -2958,8 +3333,8 @@ async function saveDataUrlFile(filename, dataUrl, mimeType, report = null, optio
     bytes: blob.size,
     sha256: await sha256Hex(dataUrl),
     savedAt: new Date().toISOString(),
-    target: state.outputTargetLabel,
-    method: state.outputDirectoryHandle ? "file-system-access" : "chrome-downloads"
+    target: activeOutputTargetLabel(),
+    method: usingOutputDirectory ? "file-system-access" : "chrome-downloads"
   };
 
   try {
@@ -2978,20 +3353,18 @@ async function saveDataUrlFile(filename, dataUrl, mimeType, report = null, optio
       );
     }
   } catch (error) {
-    record.method = "chrome-downloads-fallback";
-    record.warning = friendlySaveWarning(error);
-    if (report) report.warnings.push(record.warning);
-    disconnectOutputFolderAfterWriteFailure();
-    record.savedFilename = sanitizeOutputFilename(filename);
-    try {
-      await withTimeout(
-        downloadDataUrl(record.savedFilename, dataUrl),
-        SAVE_TIMEOUT_MS,
-        `Timed out while downloading ${record.savedFilename}`
-      );
-    } catch (downloadError) {
-      throw new Error(`Could not save ${filename}. ${friendlySaveWarning(error)} Fallback download also failed: ${downloadError?.message || String(downloadError)}`);
+    if (usingOutputDirectory) {
+      record.warning = friendlySaveWarning(error);
+      if (report) report.warnings.push(record.warning);
+      disconnectOutputFolderAfterWriteFailure();
+      const folderError = new OutputFolderUnavailableError(`Could not save ${filename}. ${record.warning} The run was stopped; no fallback file was sent to Downloads.`);
+      if (state.runAbortController && !state.runAbortController.signal.aborted) {
+        state.stopRequested = true;
+        state.runAbortController.abort(folderError);
+      }
+      throw folderError;
     }
+    throw new Error(`Could not download ${record.savedFilename}. ${error?.message || String(error)}`);
   }
 
   if (report && !options.skipReportRecord) {
@@ -3004,10 +3377,10 @@ async function saveDataUrlFile(filename, dataUrl, mimeType, report = null, optio
 function friendlySaveWarning(error) {
   const message = error?.message || String(error);
   if (/requested file or directory could not be found|notfound/i.test(message)) {
-    return "Selected output folder is no longer available. Reconnect it with Choose output folder; this file was saved through Chrome downloads instead.";
+    return "Selected output folder is no longer available. Reconnect it with Choose output folder.";
   }
   if (/permission|denied|notallowed|security/i.test(message)) {
-    return "Selected output folder permission is no longer available. Reconnect it with Choose output folder; this file was saved through Chrome downloads instead.";
+    return "Selected output folder permission is no longer available. Reconnect it with Choose output folder.";
   }
   return `Selected folder write failed: ${message}`;
 }
@@ -3110,21 +3483,25 @@ function truncateFilenameBase(value, maxLength) {
   return `${value.slice(0, headLength)}-${value.slice(-tailLength)}`;
 }
 
-async function saveExportReport(report, primaryResult = null) {
+async function saveExportReport(report, primaryResult = null, options = {}) {
   report.completedAt = new Date().toISOString();
-  report.outputTarget = state.outputTargetLabel;
+  report.outputTarget = activeOutputTargetLabel();
   report.summary = buildExportReportSummary(report, primaryResult);
   report.validation = validateReport(report, primaryResult, {
     expectedScreenshots: expectedScreenshotsForReport(report, primaryResult)
   });
-  await saveTextFile(`${report.runFolder}/run-summary.md`, runSummaryMarkdown(report, primaryResult), "text/markdown", report);
+  if (!options.compact) {
+    await saveTextFile(`${report.runFolder}/run-summary.md`, runSummaryMarkdown(report, primaryResult), "text/markdown", report);
+  }
   report.generatedFileCount = report.files.length;
   report.totalBytes = report.files.reduce((sum, file) => sum + (file.bytes || 0), 0);
   report.validation = validateReport(report, primaryResult, {
     expectedScreenshots: expectedScreenshotsForReport(report, primaryResult)
   });
   await saveTextFile(`${report.runFolder}/report.json`, jsonText(report), "application/json", null, { skipReportRecord: true });
-  await saveTextFile(`_history/latest-report.json`, jsonText(report), "application/json", null, { skipReportRecord: true });
+  if (state.outputDirectoryHandle) {
+    await saveTextFile(`_history/latest-report.json`, jsonText(report), "application/json", null, { skipReportRecord: true });
+  }
   if (state.outputDirectoryHandle) {
     await loadHistoryFromOutputFolder({ silent: true, requestPermission: false, preserveResult: true }).catch(() => {});
   }
@@ -3303,6 +3680,7 @@ function buildBaseName(result) {
 }
 
 function summarizeResult(result) {
+  const configurationArtifact = buildConfigurationArtifact(result);
   return {
     capturedAt: result.capturedAt,
     title: result.title,
@@ -3313,6 +3691,11 @@ function summarizeResult(result) {
     itemCount: result.items?.length || 0,
     versionCount: result.versions?.length || 0,
     promptHash: result.prompt?.contentHash || "",
+    configurationQuality: configurationArtifact?.validation || null,
+    relatedPromptCount: configurationArtifact?.configuration?.prompts?.length || 0,
+    toolCount: configurationArtifact?.configuration?.tools?.length || 0,
+    deniedTopicCount: configurationArtifact?.configuration?.deniedTopics?.length || 0,
+    sensitiveInformationTypeCount: configurationArtifact?.configuration?.sensitiveInformationTypes?.length || 0,
     warnings: result.warnings || []
   };
 }

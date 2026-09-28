@@ -807,10 +807,10 @@
       detail.prompt = readPromptText();
     }
     if (detected.section === "guardrails") {
-      detail.guardrail = readGuardrailSections(text);
+      detail.guardrail = readGuardrailSections(text, tables);
     }
     if (detected.section === "ai-agents") {
-      detail.agent = readAgentSections(text, tables);
+      detail.agent = readAgentSections(text, tables, detail.links);
     }
     if (["contact-flows", "flow-modules"].includes(detected.section)) {
       detail.flow = readFlowDetail();
@@ -1811,7 +1811,7 @@
     });
   }
 
-  function readGuardrailSections(text) {
+  function readGuardrailSections(text, tables = []) {
     const contentFilterLines = getSectionLines("Content filters", ["Denied topics"], (windowLines) => windowLines.includes("Harmful categories"));
     const deniedTopicLines = getSectionLines("Denied topics", ["Word filters", "Sensitive information filters"]);
     const wordFilterLines = getSectionLines("Word filters", ["Sensitive information filters"]);
@@ -1819,15 +1819,33 @@
     const contextualLines = getSectionLines("Contextual grounding check", ["Blocked messaging", "Tags"]);
     const blockedLines = getSectionLines("Blocked messaging", ["Tags", "Versions"]);
 
+    const deniedTopicRows = rowsFromTable(tables, (headers) => headers.includes("definition") && headers.includes("sample phrases"));
+    const sensitiveInformationRows = rowsFromTable(tables, (headers) => headers.includes("pii type") && headers.includes("guardrail behavior"));
+    const deniedTopicCount = readGuardrailSectionCount(deniedTopicLines);
+    const sensitiveInformationTypeCount = readGuardrailSectionCount(sensitiveLines);
+    const deniedTopics = deniedTopicCount === 0 ? [] : removeGuardrailPlaceholderRows(deniedTopicRows);
+    const sensitiveInformationTypes = sensitiveInformationTypeCount === 0
+      ? []
+      : removeGuardrailPlaceholderRows(sensitiveInformationRows);
+    const versions = rowsFromTable(tables, (headers) => headers.includes("version") && headers.includes("status"));
+
     return compactObject({
       contentFiltersParsed: parseGuardrailContentFilters(contentFilterLines),
+      deniedTopics,
+      deniedTopicCount,
+      sensitiveInformationTypes,
+      sensitiveInformationTypeCount,
+      versions,
+      wordFiltersParsed: parseGuardrailWordFilters(wordFilterLines),
+      contextualGroundingParsed: parseGuardrailContextualGrounding(contextualLines),
+      blockedMessagingParsed: parseGuardrailBlockedMessaging(blockedLines),
       deniedTopicsText: deniedTopicLines.join(" "),
       wordFiltersText: wordFilterLines.join(" "),
       sensitiveInformationText: sensitiveLines.join(" "),
       contextualGroundingText: contextualLines.join(" "),
       blockedMessagingText: blockedLines.join(" "),
       contentFilters: extractBetween(text, "Content filters", "Denied topics"),
-      deniedTopics: extractBetween(text, "Denied topics", "Word filters"),
+      deniedTopicsRaw: extractBetween(text, "Denied topics", "Word filters"),
       wordFilters: extractBetween(text, "Word filters", "Sensitive information filters"),
       sensitiveInformationFilters: extractBetween(text, "Sensitive information filters", "Contextual grounding check"),
       contextualGrounding: extractBetween(text, "Contextual grounding check", "Blocked messaging"),
@@ -1835,18 +1853,61 @@
     });
   }
 
-  function readAgentSections(text, tables) {
-    const tableSummaries = {};
+  function readAgentSections(text, tables, links = []) {
+    const tableSummaries = {
+      prompts: [],
+      tools: [],
+      securityProfiles: [],
+      versions: []
+    };
     for (const table of tables) {
-      const headers = table.headers.map((header) => header.toLowerCase()).join("|");
-      if (headers.includes("instructions") || headers.includes("namespace")) tableSummaries.tools = table.rows;
-      if (headers.includes("version") && headers.includes("status")) tableSummaries.versions = table.rows;
-      if (headers.includes("permissions")) tableSummaries.securityProfiles = table.rows;
+      const headers = table.headers.map((header) => header.toLowerCase());
+      const headerText = headers.join("|");
+      if (headers.includes("instructions") || headers.includes("namespace")) {
+        tableSummaries.tools.push(...table.rows);
+        continue;
+      }
+      if (headers.includes("version") && headers.includes("status") && !headers.includes("name")) {
+        tableSummaries.versions.push(...table.rows);
+        continue;
+      }
+      if (headers.includes("name") && headers.includes("status") && headers.includes("version") && headers.includes("type")) {
+        tableSummaries.prompts.push(...table.rows.filter((row) => row.url || row.id || row.name));
+        continue;
+      }
+      if (headers.includes("name") && headers.includes("description") && !headerText.includes("instructions")) {
+        tableSummaries.securityProfiles.push(...table.rows);
+      }
     }
+    const relatedPromptLinks = links
+      .filter((link) => /\/q-connect\/ai-prompts\//.test(link.href || ""))
+      .map((link) => ({ name: link.text || "", url: link.href || "", id: idFromPath(link.href || "") }));
+    const relatedGuardrails = links
+      .filter((link) => /\/q-connect\/guardrails\//.test(link.href || ""))
+      .map((link) => ({ name: link.text || "", url: link.href || "", id: idFromPath(link.href || "") }));
+    tableSummaries.prompts.push(...relatedPromptLinks);
     return compactObject({
       overviewText: extractBetween(text, "Overview", "Security Profiles"),
-      ...tableSummaries
+      prompts: dedupeObjects(tableSummaries.prompts, (item) => item.id || item.url || item.name),
+      tools: dedupeObjects(tableSummaries.tools, (item) => item.name),
+      securityProfiles: dedupeObjects(tableSummaries.securityProfiles, (item) => item.name),
+      versions: dedupeObjects(tableSummaries.versions, (item) => item.version || item.name),
+      relatedGuardrails: dedupeObjects(relatedGuardrails, (item) => item.id || item.url || item.name)
     });
+  }
+
+  function rowsFromTable(tables, predicate) {
+    return tables
+      .filter((table) => predicate(table.headers.map((header) => header.toLowerCase())))
+      .flatMap((table) => table.rows || []);
+  }
+
+  function idFromPath(href) {
+    try {
+      return new URL(href, APP_ORIGIN).pathname.split("/").filter(Boolean).pop() || "";
+    } catch {
+      return "";
+    }
   }
 
   function readFlowDetail() {
@@ -2053,6 +2114,43 @@
     return compactObject(filters);
   }
 
+  function readGuardrailSectionCount(lines) {
+    for (const line of lines) {
+      const match = normalizeText(line).match(/(?:^|\s)\((\d+)\)(?:\s|$)/);
+      if (match) return Number(match[1]);
+    }
+    return null;
+  }
+
+  function removeGuardrailPlaceholderRows(rows) {
+    return rows.filter((row) => {
+      const values = Object.values(row || {}).map((value) => normalizeText(value)).filter(Boolean);
+      return values.length > 0 && values.some((value) => !/^(?:Not Found|No results(?: were found)?|-|–|—)$/i.test(value));
+    });
+  }
+
+  function parseGuardrailWordFilters(lines) {
+    const text = lines.join(" ");
+    const profanityFilter = text.match(/Profanity filter\s+(Enabled|Disabled)/i)?.[1] || "";
+    return compactObject({ profanityFilter });
+  }
+
+  function parseGuardrailContextualGrounding(lines) {
+    const text = lines.join(" ");
+    return compactObject({
+      groundingCheck: text.match(/Grounding check\s+(Enabled|Disabled)/i)?.[1] || "",
+      relevanceCheck: text.match(/Relevance check\s+(Enabled|Disabled)/i)?.[1] || ""
+    });
+  }
+
+  function parseGuardrailBlockedMessaging(lines) {
+    const text = lines.join(" ");
+    return compactObject({
+      blockedPrompts: text.match(/Messaging shown for blocked prompts\s+(.+?)(?=\s+Messaging shown for blocked responses|$)/i)?.[1] || "",
+      blockedResponses: text.match(/Messaging shown for blocked responses\s+(.+)$/i)?.[1] || ""
+    });
+  }
+
   function readContactTraceSections(text, tables) {
     const lines = getVisibleTextLines(document.body);
     const links = allLinks();
@@ -2198,7 +2296,7 @@
     };
 
     if (requiredOverviewFields[detected.section]) {
-      const missing = requiredOverviewFields[detected.section].filter((field) => !overview[field]);
+      const missing = requiredOverviewFields[detected.section].filter((field) => !isMeaningfulCapturedValue(overview[field]));
       if (missing.length) warnings.push(`Overview may be incomplete. Missing: ${missing.join(", ")}.`);
     }
 
@@ -2213,6 +2311,18 @@
       }
       if (!detail.guardrail?.deniedTopicsText && !detail.guardrail?.deniedTopics) {
         warnings.push("Guardrail denied topics were not captured.");
+      }
+      if (!detail.guardrail?.versions?.length) warnings.push("Guardrail version history was not captured.");
+    }
+
+    if (detected.section === "ai-agents") {
+      if (!isMeaningfulCapturedValue(overview.aIAgentID) && !isMeaningfulCapturedValue(overview.idFromUrl)) warnings.push("AI agent ID was not captured.");
+      if (!isMeaningfulCapturedValue(overview.aIAgentARN)) warnings.push("AI agent ARN was not captured.");
+      if (/orchestration/i.test(overview.type || "") && !detail.agent?.prompts?.length) {
+        warnings.push("No related orchestration prompt was captured.");
+      }
+      if (/orchestration/i.test(overview.type || "") && !detail.agent?.tools?.length) {
+        warnings.push("No orchestration tools were captured.");
       }
     }
 
@@ -2251,6 +2361,11 @@
     }
 
     return warnings;
+  }
+
+  function isMeaningfulCapturedValue(value) {
+    const normalized = normalizeText(value);
+    return Boolean(normalized && !/^(?:-|–|—|n\/a|none|null|undefined)$/i.test(normalized));
   }
 
   function hasObjectContent(value) {

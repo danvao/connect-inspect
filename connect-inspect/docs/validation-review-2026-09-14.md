@@ -1,5 +1,27 @@
 # Validation Review - 2026-09-14
 
+## Guardrail and AI-Agent Artifact Review - 2026-09-28
+
+Reviewed the existing normalized export directory containing three guardrail details and 22 AI-agent detail artifacts.
+
+### Guardrails
+
+- The three captures contained useful configuration rather than only page text.
+- Coverage included identity, ARN, status, versions, content-filter strengths, denied topics, sensitive-information behavior, contextual grounding, word filters, and blocked messaging.
+- The source detail files also contained duplicated text and console navigation links. These remain useful as evidence but should not be the primary analysis input.
+- A dedicated `-configuration.json` artifact is now generated with normalized fields only.
+
+### AI Agents
+
+- Valid captures contained identity and ARN, type, locale, related prompts, orchestration tools, security profiles, and version history.
+- The previous extractor incorrectly copied the tools table into `securityProfiles` because that table contains a Permissions column. Table classification now uses the complete header shape.
+- Related prompts were previously available only inside generic tables. They are now normalized under `configuration.prompts` with IDs and URLs.
+- Three stale `captured-current.json` artifacts used `-` placeholders for required overview fields. Each had a later valid detail capture, but the older validator did not flag the placeholders. Placeholder-only values are now treated as missing data.
+
+### Result
+
+Guardrail exports were substantively useful but unnecessarily noisy. AI-agent exports were partially useful but required normalization and one table-classification correction. New manual downloads preserve the full detail JSON as evidence and add a cleaner `-configuration.json` file with an explicit `complete` or `warning` validation status.
+
 ## Source Run
 
 - Run inspected: `20260914T024131Z-validation_screenshots`
@@ -153,4 +175,3 @@ The parser has been improved, but it should be rerun against the live page to co
    - Flow module versions JSON should have no rows when the UI says `No results were found`.
    - Conversational AI aliases/versions overview should not contain a bogus `description`.
    - Conversational AI configuration should include at least language/status and confidence threshold when visible.
-

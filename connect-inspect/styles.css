@@ -8,6 +8,9 @@
   --accent: #5fb3d8;
   --accent-strong: #8fd4ef;
   --danger: #ef9a9a;
+  --success: #6ee79a;
+  --warning: #ffd166;
+  --warning-bg: #3b321d;
 }
 
 * {
@@ -50,9 +53,50 @@ button:hover,
   border-color: var(--accent);
 }
 
+button:focus-visible,
+.fileButton:focus-visible,
+summary:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
+}
+
 button:disabled {
   cursor: not-allowed;
   opacity: 0.45;
+}
+
+.dangerButton:not(:disabled) {
+  background: #5c1f2a;
+  border-color: #d96c7a;
+  color: #fff;
+}
+
+.dangerButton:not(:disabled):hover {
+  background: #722735;
+  border-color: #ff9aa8;
+}
+
+.primaryButton {
+  background: #1c5872;
+  border-color: #5fb3d8;
+  color: #fff;
+}
+
+.primaryButton:hover {
+  background: #236b89;
+  border-color: var(--accent-strong);
+}
+
+.secondaryButton {
+  background: #263d50;
+  border-color: #47657a;
+}
+
+.warningButton {
+  background: var(--warning-bg);
+  border-color: #8f7630;
+  color: var(--warning);
 }
 
 input[type="file"] {
@@ -98,6 +142,13 @@ h1 {
   margin: 0;
 }
 
+.versionText {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .badge {
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -113,6 +164,13 @@ h1 {
   background: var(--panel);
   margin-bottom: 10px;
   padding: 10px;
+}
+
+.panelHeading {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
 }
 
 .tabBar {
@@ -133,15 +191,78 @@ h1 {
   background: #20303d;
 }
 
-.panel > button,
-.panel > .fileButton {
-  margin: 0 6px 8px 0;
-}
-
 .panelTitle {
   color: var(--muted);
   font-weight: 700;
   margin-bottom: 8px;
+}
+
+.panelHeading .panelTitle {
+  margin-bottom: 0;
+}
+
+.panelSubtitle {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+  margin: -2px 0 8px;
+}
+
+.pageContextPanel {
+  background: #121d26;
+  padding: 9px 10px;
+}
+
+.contextType {
+  color: var(--accent-strong);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.contextUrl {
+  color: var(--muted);
+  display: block;
+  font-size: 11px;
+  margin-top: 7px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contextActionsPanel {
+  border-color: #42647a;
+}
+
+.actionStack,
+.actionGrid {
+  display: grid;
+  gap: 8px;
+}
+
+.actionGrid {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.actionStack button,
+.actionGrid button,
+.actionGrid .fileButton {
+  min-width: 0;
+  width: 100%;
+}
+
+.fullRow,
+.wideButton {
+  grid-column: 1 / -1;
+  width: 100%;
+}
+
+.actionIssueDetails {
+  background: #201c12;
+  border-left: 3px solid var(--warning);
+  color: #f4e4af;
+  font-size: 12px;
+  margin-top: 8px;
+  padding: 8px 9px;
 }
 
 .inlineControl {
@@ -160,6 +281,20 @@ h1 {
   color: var(--muted);
   font-size: 12px;
   font-weight: 650;
+}
+
+.statusStrip {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 2px;
+  margin-top: 10px;
+  padding-top: 9px;
+}
+
+.statusGrid {
+  border-top: 1px solid var(--line);
+  margin-top: 10px;
+  padding-top: 9px;
 }
 
 .checkToggle {
@@ -198,17 +333,6 @@ h1 {
   white-space: nowrap;
 }
 
-.toolbar {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-.toolbar button:first-child {
-  grid-column: 1 / -1;
-}
-
 .navGrid {
   display: grid;
   gap: 8px;
@@ -217,6 +341,33 @@ h1 {
 
 .navGrid button {
   min-height: 32px;
+}
+
+.disclosure {
+  padding: 0;
+}
+
+.disclosure > summary {
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 700;
+  list-style-position: inside;
+  padding: 10px;
+  user-select: none;
+}
+
+.disclosure[open] > summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.disclosureBody {
+  margin: 0;
+  padding: 10px;
+}
+
+.disclosure pre.disclosureBody {
+  border: 0;
+  border-radius: 0 0 7px 7px;
 }
 
 progress {
@@ -237,7 +388,7 @@ progress {
 }
 
 .trackerSuccess .trackerStatus {
-  color: #6ee79a;
+  color: var(--success);
 }
 
 .trackerWarning .trackerStatus {
@@ -288,6 +439,14 @@ pre {
 
 .sidePanel pre {
   max-height: 34vh;
+}
+
+.resultPanel pre {
+  max-height: 30vh;
+}
+
+.compactActions button {
+  min-height: 32px;
 }
 
 .error {
