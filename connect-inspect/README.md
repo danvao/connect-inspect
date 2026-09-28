@@ -170,6 +170,7 @@ For flow JSON, you can also open a flow designer/detail page and click `Export F
 
 ## Supporting Documentation
 
+- `docs/export-output-reference.md`: complete reference for every output folder and file type, including run reports, configuration captures, contact records, analytics, diagnostics, screenshots, repeated downloads, and interpretation rules for Claude.
 - `docs/screenshot-analysis-prompt.md`: prompt template for turning Amazon Connect screenshots into English configuration reports during manual validation.
 - `docs/amazon-connect-config-report.md`: example/manual analysis report generated from Amazon Connect screenshots, useful as a target format for screenshot validation and future Analytics documentation.
 - `docs/validation-review-2026-09-14.md`: latest screenshot-vs-extraction validation notes and extraction fixes.
